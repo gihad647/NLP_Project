@@ -1,5 +1,5 @@
 
-ْ# 🔍 Local RAG System — CV-to-Job Matching
+ْ# 🔍 Local RAG System — 
 
 An end-to-end, containerized Retrieval-Augmented Generation (RAG) system built with FastAPI, ChromaDB, and multilingual embeddings. Supports English and Arabic CVs.
 
