@@ -1,0 +1,62 @@
+version: "3.9"
+
+services:
+  # ─── ChromaDB Vector Database ────────────────────────────
+  chromadb:
+    image: chromadb/chroma:0.5.3
+    container_name: rag_chromadb
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── FastAPI RAG Application ─────────────────────────────
+  rag_api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag_api
+    ports:
+      - "8080:8080"
+    environment:
+      # ── LLM Provider (switch here, no code change needed) ──
+      - LLM_PROVIDER=gemini          # gemini | openai | ollama
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=mistral
+      # ── ChromaDB ──
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      # ── Chunking ──
+      - CHUNK_SIZE=500
+      - CHUNK_OVERLAP=50
+    volumes:
+      - ./data:/data                 # mount raw documents
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Ollama (local LLM — optional) ───────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    profiles:
+      - ollama                       # only starts with: docker compose --profile ollama up
+
+volumes:
+  chroma_data:
+  ollama_models:
