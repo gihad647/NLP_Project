@@ -34,7 +34,7 @@ class GeminiLLM(BaseLLM):
     def __init__(self):
         import google.generativeai as genai
         genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel("gemini-1.5-flash")
+        self.model = genai.GenerativeModel("gemini-2.0-flash")
 
     def generate(self, prompt: str, context_chunks: List[str]) -> Dict:
         context = "\n\n---\n\n".join(context_chunks)
@@ -72,6 +72,64 @@ class OpenAILLM(BaseLLM):
 
 
 # ────────────────────────────────────────────────────────────
+# OpenRouter implementation (OpenAI-compatible, free models available)
+# ────────────────────────────────────────────────────────────
+class OpenRouterLLM(BaseLLM):
+    def __init__(self):
+        from openai import OpenAI
+        self.client = OpenAI(
+            api_key=settings.OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+        )
+        self.model = settings.OPENROUTER_MODEL
+
+    def generate(self, prompt: str, context_chunks: List[str]) -> Dict:
+        context = "\n\n---\n\n".join(context_chunks)
+        full_prompt = _build_prompt(prompt, context)
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that answers questions based solely on the provided context."},
+                {"role": "user", "content": full_prompt},
+            ],
+            temperature=0.2,
+        )
+        return {
+            "answer": resp.choices[0].message.content,
+            "tokens_used": resp.usage.total_tokens if resp.usage else None,
+        }
+
+
+# ────────────────────────────────────────────────────────────
+# Groq implementation (OpenAI-compatible, fast free tier)
+# ────────────────────────────────────────────────────────────
+class GroqLLM(BaseLLM):
+    def __init__(self):
+        from openai import OpenAI
+        self.client = OpenAI(
+            api_key=settings.GROQ_API_KEY,
+            base_url="https://api.groq.com/openai/v1",
+        )
+        self.model = settings.GROQ_MODEL
+
+    def generate(self, prompt: str, context_chunks: List[str]) -> Dict:
+        context = "\n\n---\n\n".join(context_chunks)
+        full_prompt = _build_prompt(prompt, context)
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that answers questions based solely on the provided context."},
+                {"role": "user", "content": full_prompt},
+            ],
+            temperature=0.2,
+        )
+        return {
+            "answer": resp.choices[0].message.content,
+            "tokens_used": resp.usage.total_tokens if resp.usage else None,
+        }
+
+
+# ────────────────────────────────────────────────────────────
 # Ollama (local) implementation
 # ────────────────────────────────────────────────────────────
 class OllamaLLM(BaseLLM):
@@ -100,6 +158,8 @@ class LLMFactory:
     _registry: Dict[str, type] = {
         "gemini": GeminiLLM,
         "openai": OpenAILLM,
+        "openrouter": OpenRouterLLM,
+        "groq": GroqLLM,
         "ollama": OllamaLLM,
     }
 

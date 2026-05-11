@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CV Matcher — RAG System</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      min-height: 100vh;
+    }
+
+    header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%);
+      color: white;
+      padding: 20px 32px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+    }
+    header .logo { font-size: 28px; }
+    header h1 { font-size: 20px; font-weight: 700; letter-spacing: 0.3px; }
+    header p  { font-size: 13px; opacity: 0.65; margin-top: 2px; }
+    header .badge {
+      margin-left: auto;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    header .badge .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #4ade80;
+      box-shadow: 0 0 6px #4ade80;
+    }
+
+    /* Tabs */
+    .tabs {
+      background: #16213e;
+      display: flex;
+      gap: 0;
+      padding: 0 32px;
+    }
+    .tab-btn {
+      padding: 12px 22px;
+      color: rgba(255,255,255,0.5);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+      user-select: none;
+    }
+    .tab-btn:hover   { color: rgba(255,255,255,0.8); }
+    .tab-btn.active  { color: #fff; border-bottom-color: #4ade80; }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    main {
+      max-width: 900px;
+      margin: 36px auto;
+      padding: 0 20px 60px;
+    }
+
+    /* ── Search card ── */
+    .search-card {
+      background: white;
+      border-radius: 16px;
+      padding: 28px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+    }
+    .search-card label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #555;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .input-row { display: flex; gap: 10px; }
+    #query {
+      flex: 1;
+      padding: 14px 18px;
+      border: 2px solid #e2e8f0;
+      border-radius: 10px;
+      font-size: 15px;
+      transition: border-color 0.2s;
+      outline: none;
+    }
+    #query:focus { border-color: #0f3460; }
+    #query::placeholder { color: #aaa; }
+
+    #send-btn {
+      padding: 14px 28px;
+      background: linear-gradient(135deg, #0f3460, #1a6ec2);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      white-space: nowrap;
+    }
+    #send-btn:hover  { opacity: 0.9; }
+    #send-btn:active { transform: scale(0.98); }
+    #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .options-row {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+    .options-row label { font-size: 13px; color: #666; }
+    .options-row select {
+      padding: 6px 10px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 13px;
+      background: white;
+      cursor: pointer;
+    }
+    #topk-val { font-weight: 700; color: #0f3460; }
+
+    .examples {
+      margin-top: 16px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .examples span { font-size: 12px; color: #888; align-self: center; }
+    .chip {
+      padding: 6px 14px;
+      background: #f0f2f5;
+      border: 1px solid #dde1e7;
+      border-radius: 20px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+      color: #444;
+    }
+    .chip:hover { background: #e2e8f0; color: #0f3460; border-color: #0f3460; }
+
+    /* ── Spinner ── */
+    .spinner { display: none; text-align: center; padding: 40px; color: #888; }
+    .spinner.active { display: block; }
+    .spinner::after {
+      content: "";
+      display: inline-block;
+      width: 32px; height: 32px;
+      border: 3px solid #ddd;
+      border-top-color: #0f3460;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Answer card ── */
+    .answer-card {
+      background: white;
+      border-radius: 16px;
+      padding: 24px 28px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+      border-left: 4px solid #0f3460;
+    }
+    .answer-card .meta {
+      font-size: 12px; color: #888;
+      margin-bottom: 12px;
+      display: flex; gap: 16px; flex-wrap: wrap;
+    }
+    .answer-card h2 {
+      font-size: 14px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      color: #0f3460; margin-bottom: 10px;
+    }
+    .answer-card p { font-size: 15px; line-height: 1.7; color: #2d3748; white-space: pre-wrap; }
+
+    .sources-title {
+      font-size: 13px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      color: #888; margin: 24px 0 12px;
+    }
+    .sources-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(260px,1fr)); gap: 14px; }
+    .source-card {
+      background: white; border-radius: 12px; padding: 16px 18px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06); border: 1px solid #eee;
+      transition: box-shadow 0.2s;
+    }
+    .source-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    .source-card .rank {
+      width: 24px; height: 24px; border-radius: 50%;
+      background: #0f3460; color: white;
+      font-size: 11px; font-weight: 700;
+      display: inline-flex; align-items: center; justify-content: center;
+      margin-bottom: 8px;
+    }
+    .source-card .filename { font-size: 13px; font-weight: 600; color: #1a1a2e; word-break: break-all; margin-bottom: 4px; }
+    .score-bar-wrap { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+    .score-bar { flex: 1; height: 5px; background: #eee; border-radius: 3px; overflow: hidden; }
+    .score-bar-fill { height: 100%; background: linear-gradient(90deg,#0f3460,#1a6ec2); border-radius: 3px; }
+    .score-label { font-size: 11px; color: #888; white-space: nowrap; }
+    .source-card .snippet {
+      font-size: 12px; color: #666; line-height: 1.5; margin-top: 8px;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }
+
+    /* ── Chunks tab ── */
+    .chunks-toolbar {
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 20px; flex-wrap: wrap;
+    }
+    .chunks-toolbar select, .chunks-toolbar input {
+      padding: 8px 12px;
+      border: 1px solid #ddd; border-radius: 8px;
+      font-size: 13px; background: white; outline: none;
+    }
+    .chunks-toolbar input { flex: 1; min-width: 180px; }
+    .chunks-toolbar input:focus { border-color: #0f3460; }
+    #refresh-btn {
+      padding: 8px 18px;
+      background: #0f3460; color: white;
+      border: none; border-radius: 8px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    #refresh-btn:hover { opacity: 0.88; }
+    #chunk-count { font-size: 13px; color: #888; margin-left: auto; }
+
+    .cv-group { margin-bottom: 28px; }
+    .cv-group-header {
+      display: flex; align-items: center; gap: 10px;
+      background: #16213e; color: white;
+      padding: 10px 16px; border-radius: 10px 10px 0 0;
+      font-size: 13px; font-weight: 700;
+    }
+    .cv-group-header .cv-badge {
+      background: rgba(255,255,255,0.15);
+      border-radius: 12px; padding: 2px 10px; font-size: 11px;
+    }
+    .chunk-item {
+      background: white; border: 1px solid #e8ecf0; border-top: none;
+      padding: 14px 18px;
+    }
+    .chunk-item:last-child { border-radius: 0 0 10px 10px; }
+    .chunk-item:hover { background: #fafbfc; }
+    .chunk-meta {
+      display: flex; gap: 14px; margin-bottom: 8px; flex-wrap: wrap;
+    }
+    .chunk-meta span {
+      font-size: 11px; color: #888;
+      background: #f0f2f5; padding: 2px 8px; border-radius: 10px;
+    }
+    .chunk-text {
+      font-size: 13px; color: #2d3748; line-height: 1.6;
+      white-space: pre-wrap; word-break: break-word;
+    }
+
+    .error-box {
+      background: #fff5f5; border: 1px solid #feb2b2;
+      border-radius: 12px; padding: 18px 22px;
+      color: #c53030; font-size: 14px;
+    }
+    .empty-msg { text-align: center; padding: 60px 20px; color: #aaa; font-size: 15px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🔍</div>
+  <div>
+    <h1>CV Matcher — RAG System</h1>
+    <p>Ask a question and find the best matching candidates</p>
+  </div>
+  <div class="badge" id="status-badge">
+    <span class="dot" style="background:#fbbf24;box-shadow:0 0 6px #fbbf24"></span>
+    <span id="status-text">Checking…</span>
+  </div>
+</header>
+
+<div class="tabs">
+  <div class="tab-btn active" onclick="switchTab('search', this)">Search</div>
+  <div class="tab-btn" onclick="switchTab('chunks', this)">Browse Chunks</div>
+</div>
+
+<main>
+  <!-- ══ SEARCH TAB ══ -->
+  <div class="tab-panel active" id="tab-search">
+    <div class="search-card">
+      <label>Your Query</label>
+      <div class="input-row">
+        <input id="query" type="text" placeholder="e.g. Find a senior Python developer with FastAPI experience" />
+        <button id="send-btn" onclick="runQuery()">Search</button>
+      </div>
+      <div class="options-row">
+        <label>Provider:
+          <select id="provider">
+            <option value="">Default (Groq)</option>
+            <option value="groq">Groq</option>
+            <option value="gemini">Gemini</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="openai">OpenAI</option>
+          </select>
+        </label>
+        <label>Results: <span id="topk-val">5</span>
+          <input type="range" id="topk" min="1" max="10" value="5"
+                 oninput="document.getElementById('topk-val').textContent=this.value" />
+        </label>
+      </div>
+      <div class="examples">
+        <span>Try:</span>
+        <div class="chip" onclick="setQuery('Find a senior Python developer with FastAPI experience')">Senior Python / FastAPI</div>
+        <div class="chip" onclick="setQuery('Who has experience with Kubernetes and DevOps?')">Kubernetes & DevOps</div>
+        <div class="chip" onclick="setQuery('Find an ML engineer with NLP and RAG pipeline experience')">ML / NLP Engineer</div>
+        <div class="chip" onclick="setQuery('Who has React and TypeScript frontend skills?')">React / TypeScript</div>
+        <div class="chip" onclick="setQuery('ابحث عن مطور ويب بخبرة في قواعد البيانات')">Arabic query</div>
+      </div>
+    </div>
+
+    <div id="results">
+      <div class="spinner" id="spinner"></div>
+    </div>
+  </div>
+
+  <!-- ══ CHUNKS TAB ══ -->
+  <div class="tab-panel" id="tab-chunks">
+    <div class="chunks-toolbar">
+      <button id="refresh-btn" onclick="loadChunks()">Refresh</button>
+      <select id="filter-source" onchange="renderChunks()">
+        <option value="">All CVs</option>
+      </select>
+      <input id="filter-text" type="text" placeholder="Search inside chunks…" oninput="renderChunks()" />
+      <span id="chunk-count"></span>
+    </div>
+    <div id="chunks-list"><div class="empty-msg">Click Refresh to load chunks.</div></div>
+  </div>
+</main>
+
+<script>
+  // ── Health check ─────────────────────────────────────────────
+  async function checkHealth() {
+    try {
+      const r = await fetch('/health');
+      const dot = document.querySelector('.badge .dot');
+      const txt = document.getElementById('status-text');
+      if (r.ok) {
+        dot.style.background = '#4ade80'; dot.style.boxShadow = '0 0 6px #4ade80';
+        txt.textContent = 'Online';
+      } else {
+        dot.style.background = '#f87171'; txt.textContent = 'Error';
+      }
+    } catch { document.querySelector('.badge .dot').style.background = '#f87171'; document.getElementById('status-text').textContent = 'Offline'; }
+  }
+  checkHealth();
+
+  // ── Tabs ─────────────────────────────────────────────────────
+  function switchTab(name, btn) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + name).classList.add('active');
+    if (name === 'chunks' && !window._chunksLoaded) loadChunks();
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────
+  function setQuery(text) {
+    document.getElementById('query').value = text;
+    document.getElementById('query').focus();
+  }
+  document.getElementById('query').addEventListener('keydown', e => { if (e.key === 'Enter') runQuery(); });
+  function basename(path) { return path.split('/').pop().replace(/\.[^.]+$/, '').replace(/_/g,' '); }
+  function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Query ────────────────────────────────────────────────────
+  async function runQuery() {
+    const query    = document.getElementById('query').value.trim();
+    const provider = document.getElementById('provider').value || undefined;
+    const top_k    = parseInt(document.getElementById('topk').value);
+    const results  = document.getElementById('results');
+    const spinner  = document.getElementById('spinner');
+    const btn      = document.getElementById('send-btn');
+    if (!query) { document.getElementById('query').focus(); return; }
+
+    spinner.className = 'spinner active';
+    results.innerHTML = ''; results.appendChild(spinner);
+    btn.disabled = true;
+
+    try {
+      const body = { query, top_k };
+      if (provider) body.provider = provider;
+      const resp = await fetch('/api/v1/query', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body),
+      });
+      spinner.className = 'spinner';
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({detail: resp.statusText}));
+        results.innerHTML = `<div class="error-box">&#9888; ${err.detail || 'Request failed'}</div>`;
+        return;
+      }
+      renderResults(await resp.json());
+    } catch (err) {
+      spinner.className = 'spinner';
+      results.innerHTML = `<div class="error-box">&#9888; Network error: ${err.message}</div>`;
+    } finally { btn.disabled = false; }
+  }
+
+  function renderResults(data) {
+    const results = document.getElementById('results');
+    const tokens = data.tokens_used ? `· ${data.tokens_used} tokens` : '';
+    const answerHtml = `
+      <div class="answer-card">
+        <div class="meta">
+          <span>&#129302; ${data.provider_used}</span>
+          <span>&#128196; ${data.retrieved_chunks.length} sources ${tokens}</span>
+        </div>
+        <h2>Answer</h2>
+        <p>${escHtml(data.answer)}</p>
+      </div>`;
+    const maxScore = Math.max(...data.retrieved_chunks.map(c => c.score), 0.01);
+    const sourcesHtml = data.retrieved_chunks.map((chunk, i) => {
+      const pct  = Math.round((chunk.score / maxScore) * 100);
+      const name = basename(chunk.source);
+      return `
+        <div class="source-card">
+          <div class="rank">${i + 1}</div>
+          <div class="filename">&#128196; ${escHtml(name)}</div>
+          <div class="score-bar-wrap">
+            <div class="score-bar"><div class="score-bar-fill" style="width:${pct}%"></div></div>
+            <span class="score-label">score ${chunk.score.toFixed(3)}</span>
+          </div>
+          <div class="snippet">${escHtml(chunk.content.trim())}</div>
+        </div>`;
+    }).join('');
+    results.innerHTML = answerHtml
+      + `<div class="sources-title">Retrieved Sources</div>`
+      + `<div class="sources-grid">${sourcesHtml}</div>`;
+  }
+
+  // ── Chunks tab ───────────────────────────────────────────────
+  let _allChunks = [];
+
+  async function loadChunks() {
+    document.getElementById('chunks-list').innerHTML = '<div class="empty-msg">Loading…</div>';
+    try {
+      const r = await fetch('/api/v1/chunks');
+      if (!r.ok) throw new Error(r.statusText);
+      const data = await r.json();
+      _allChunks = data.chunks;
+      window._chunksLoaded = true;
+
+      // Populate source filter
+      const sources = [...new Set(_allChunks.map(c => c.metadata.source || ''))].sort();
+      const sel = document.getElementById('filter-source');
+      sel.innerHTML = '<option value="">All CVs</option>'
+        + sources.map(s => `<option value="${escHtml(s)}">${escHtml(basename(s))}</option>`).join('');
+
+      renderChunks();
+    } catch (e) {
+      document.getElementById('chunks-list').innerHTML = `<div class="error-box">&#9888; ${e.message}</div>`;
+    }
+  }
+
+  function renderChunks() {
+    const filterSrc  = document.getElementById('filter-source').value;
+    const filterText = document.getElementById('filter-text').value.toLowerCase();
+
+    let filtered = _allChunks;
+    if (filterSrc)  filtered = filtered.filter(c => c.metadata.source === filterSrc);
+    if (filterText) filtered = filtered.filter(c => c.content.toLowerCase().includes(filterText));
+
+    document.getElementById('chunk-count').textContent =
+      `${filtered.length} of ${_allChunks.length} chunks`;
+
+    if (filtered.length === 0) {
+      document.getElementById('chunks-list').innerHTML = '<div class="empty-msg">No chunks match the filter.</div>';
+      return;
+    }
+
+    // Group by source
+    const grouped = {};
+    filtered.forEach(c => {
+      const src = c.metadata.source || 'unknown';
+      if (!grouped[src]) grouped[src] = [];
+      grouped[src].push(c);
+    });
+
+    const html = Object.entries(grouped).map(([src, chunks]) => {
+      const name = basename(src);
+      const items = chunks.map(c => {
+        const idx   = c.metadata.chunk_index ?? '?';
+        const total = c.metadata.total_chunks ?? '?';
+        const lang  = c.metadata.language || '';
+        const chars = c.content.length;
+        return `
+          <div class="chunk-item">
+            <div class="chunk-meta">
+              <span>chunk ${idx + 1} / ${total}</span>
+              ${lang ? `<span>${lang}</span>` : ''}
+              <span>${chars} chars</span>
+            </div>
+            <div class="chunk-text">${escHtml(c.content)}</div>
+          </div>`;
+      }).join('');
+      return `
+        <div class="cv-group">
+          <div class="cv-group-header">
+            &#128196; ${escHtml(name)}
+            <span class="cv-badge">${chunks.length} chunk${chunks.length > 1 ? 's' : ''}</span>
+          </div>
+          ${items}
+        </div>`;
+    }).join('');
+
+    document.getElementById('chunks-list').innerHTML = html;
+  }
+</script>
+</body>
+</html>

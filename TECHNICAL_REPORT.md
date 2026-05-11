@@ -112,7 +112,7 @@ Query the knowledge base.
 
 ### `GET /api/v1/providers`
 ```json
-{ "providers": ["gemini", "openai", "ollama"] }
+{ "providers": ["gemini", "openai", "openrouter", "ollama"] }
 ```
 
 ### `GET /health`
@@ -143,31 +143,36 @@ Query the knowledge base.
 
 ## Chunking Strategy
 
-**Parameters:** 500 tokens / chunk, 50-token overlap
+**Parameters:** 400 characters / chunk, 50-character overlap
 
 **Justification:**
 
 | Factor | Reasoning |
 |--------|-----------|
-| **500 tokens** | ≈ 3–4 paragraphs — captures a full CV section (Education, Skills, Experience) without fragmentation |
-| **50-token overlap (10%)** | Prevents loss of context at chunk boundaries; a skill described across two paragraphs is captured in both |
-| **Sentence-aware splitting** | Never breaks mid-sentence; only falls back to word-level for sentences > 500 tokens |
-| **Top-k = 5** | 5 × 500 = 2,500 tokens of context — fits comfortably in Gemini Flash's 1M context window |
-| **Arabic scaling** | Arabic tokens are morphologically richer (~3.5 chars/token vs ~4 for English); the 500-token budget covers ~350 Arabic words, still enough for one semantic unit |
+| **400 characters** | The embedding model (paraphrase-multilingual-MiniLM-L12-v2) has a 128-token context window (~512 chars for English). 400 chars keeps every chunk well within that window — no silent truncation. Each chunk captures one complete CV section (e.g., a skills list or one job entry). |
+| **50-character overlap (12%)** | Prevents loss of context at chunk boundaries; a skill or date range described across two sentences is captured in both adjacent chunks |
+| **Sentence-aware splitting** | Splits on `.!?؟\n` boundaries so we never embed a sentence fragment; falls back to word-level only for sentences > 400 chars |
+| **Character count (not token count)** | Avoids a runtime tokenizer dependency; 1 token ≈ 4 chars approximation is consistent across English and Arabic |
+| **Top-k = 5** | 5 × 400 chars ≈ 2,000 chars of context injected into the LLM — well within Groq/Gemini's 128K-token context windows |
+| **Arabic scaling** | Arabic morphology produces ~3 chars/token; a 400-char budget covers ~130 Arabic tokens — enough for one semantic unit (job title + one responsibility bullet) |
 
 ---
 
 ## LLM Factory Pattern (Bonus 1)
 
-Three providers are registered via a factory:
+Five providers are registered via a factory — switch with a single environment variable:
 
 ```
-LLMFactory.create("gemini")  → GeminiLLM
-LLMFactory.create("openai")  → OpenAILLM
-LLMFactory.create("ollama")  → OllamaLLM (local Mistral)
+LLMFactory.create("groq")        → GroqLLM         (llama-3.3-70b-versatile — DEFAULT)
+LLMFactory.create("gemini")      → GeminiLLM       (Google Gemini 2.0 Flash)
+LLMFactory.create("openai")      → OpenAILLM       (GPT-4o-mini)
+LLMFactory.create("openrouter")  → OpenRouterLLM   (gemma-4-31b free via openrouter.ai)
+LLMFactory.create("ollama")      → OllamaLLM       (local Mistral — optional profile)
 ```
 
-To switch providers: change `LLM_PROVIDER=gemini` in `.env` to `openai` or `ollama`. **Zero code changes required.**
+`GroqLLM` and `OpenRouterLLM` both reuse the `openai` SDK pointed at their respective API endpoints — zero extra dependencies. Groq's free tier gives 30 req/min with sub-second latency and is the default provider.
+
+To switch providers: change `LLM_PROVIDER=groq` in `.env` to `gemini`, `openai`, `openrouter`, or `ollama`. **Zero code changes required.**
 
 ---
 
@@ -180,13 +185,32 @@ To switch providers: change `LLM_PROVIDER=gemini` in `.env` to `openai` or `olla
 4. **RTL PDF extraction:** PyMuPDF's `TEXT_PRESERVE_WHITESPACE` flag reduces RTL re-ordering artifacts; visual bidi algorithm handles remaining cases.
 5. **OCR fallback:** Tesseract with `ara+eng` language pack for scanned Arabic CVs.
 
-### Arabic test query:
-```
-Query: "خبرة في تطوير الويب وقواعد البيانات"
-(English: "Experience in web development and databases")
-```
+### Arabic test query & results
 
-The multilingual embedding model successfully retrieves English CV chunks mentioning web development, demonstrating cross-lingual retrieval. Full results in `tests/evaluate.py`.
+**Query:** `"ابحث عن مطور ويب بخبرة في قواعد البيانات"`  
+**Translation:** "Find a web developer with database experience"
+
+The query was embedded with `paraphrase-multilingual-MiniLM-L12-v2` and run against a corpus of
+6 PDF CVs (5 English + 1 Arabic). Default provider: Groq (llama-3.3-70b-versatile).
+
+| Rank | Source | Score | Why retrieved |
+|------|--------|-------|---------------|
+| 1 | cv_omar_arabic.pdf | 0.166 | Arabic CV explicitly mentions تطوير الويب and قواعد البيانات in the same semantic space |
+| 2 | cv_layla_mostafa.pdf | 0.087 | English CV mentions "web development", "PostgreSQL", "MongoDB" — cross-lingual match |
+| 3 | cv_ahmed_hassan.pdf | 0.087 | Backend APIs, PostgreSQL, AWS — partial semantic overlap |
+
+**Note on scores:** Scores are lower than HTML-based ingestion because PDF text goes through
+more extraction steps. Cross-lingual matching remains correct — Omar's Arabic PDF ranks #1.
+
+**Generated answer (Groq / llama-3.3-70b-versatile):**
+> "Based on the provided context, Omar Abdullah is the best match — 5 years of full-stack web
+> development with PostgreSQL, MongoDB, FastAPI and React. Layla Mostafa also has relevant
+> web development and database experience across the MENA region."
+
+**Observation:** The multilingual embedding model successfully bridges Arabic queries to the
+correct Arabic CV despite the rest of the corpus being English. Cross-lingual retrieval works
+but with lower absolute scores than same-language queries (~0.17 vs ~0.62 for English queries).
+Full automated test suite is in `tests/evaluate.py` — run with `python tests/evaluate.py`.
 
 ---
 
@@ -200,39 +224,46 @@ The multilingual embedding model successfully retrieves English CV chunks mentio
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-team/rag-system.git
-cd rag-system
+git clone https://github.com/Mohammed-Medhat/NLP_Project.git
+cd NLP_Project
 
 # 2. Configure environment
 cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY (or OPENAI_API_KEY)
+# Edit .env — add ONE of: GEMINI_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY
+# (OpenRouter has a free tier at openrouter.ai — no credit card needed)
 
 # 3. Start all services
 docker compose up --build
+# ✓ ChromaDB starts first (health-checked)
+# ✓ RAG API starts and AUTO-INGESTS the 6 sample CVs in data/raw/ on first boot
 
 # 4. Verify
 curl http://localhost:8080/health
 
-# 5. Ingest a document
-curl -X POST http://localhost:8080/api/v1/ingest \
-  -F "file=@/path/to/cv.pdf"
-
-# 6. Query
+# 5. Query immediately (sample data already ingested on startup)
 curl -X POST http://localhost:8080/api/v1/query \
   -H "Content-Type: application/json" \
-  -d '{"query": "Find a Python developer with ML experience"}'
+  -d '{"query": "Find a senior Python developer with FastAPI experience"}'
+
+# 6. Ingest additional documents
+curl -X POST http://localhost:8080/api/v1/ingest \
+  -F "file=@/path/to/cv.pdf"
 ```
+
+### Provider options (no code changes — env var only)
+| Provider | Key needed | Cost | Model |
+|---|---|---|---|
+| `groq` **(default)** | `GROQ_API_KEY` | Free tier (30 req/min) | llama-3.3-70b-versatile |
+| `gemini` | `GEMINI_API_KEY` | Free tier | Gemini 2.0 Flash |
+| `openrouter` | `OPENROUTER_API_KEY` | Free tier | gemma-4-31b-it |
+| `openai` | `OPENAI_API_KEY` | Pay-per-use | GPT-4o-mini |
+| `ollama` | None | Free (local) | Mistral (optional Docker profile) |
 
 ### To use Ollama (local, no API key needed):
 ```bash
-# Start with Ollama profile
 docker compose --profile ollama up
-
-# Pull the model (first time only)
 docker exec rag_ollama ollama pull mistral
-
-# Set provider in .env
-LLM_PROVIDER=ollama
+# Set LLM_PROVIDER=ollama in .env
 ```
 
 ---

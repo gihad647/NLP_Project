@@ -12,9 +12,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python dependencies first (layer caching)
+# Install uv for fast, backtrack-free dependency resolution
+RUN pip install --no-cache-dir uv
+
+# Install torch CPU-only BEFORE copying requirements.txt so this layer
+# stays cached even when requirements.txt changes (saves 180 MB re-download)
+RUN uv pip install --system --no-cache-dir \
+    "torch==2.3.1" \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining dependencies (torch already satisfied, no CUDA packages pulled)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --system --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ ./app/

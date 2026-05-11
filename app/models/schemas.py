@@ -5,7 +5,7 @@ from typing import Optional, List
 class QueryRequest(BaseModel):
     query: str = Field(..., description="User query in English or Arabic")
     top_k: Optional[int] = Field(5, description="Number of chunks to retrieve")
-    provider: Optional[str] = Field(None, description="Override LLM provider: gemini | openai | ollama")
+    provider: Optional[str] = Field(None, description="Override LLM provider: gemini | openai | openrouter | groq | ollama")
 
     class Config:
         json_schema_extra = {

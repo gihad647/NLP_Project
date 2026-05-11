@@ -75,6 +75,8 @@ class RAGService:
 
         if not query_text.strip():
             raise ValueError("Query cannot be empty.")
+        if len(query_text.strip()) < 3:
+            raise ValueError("Query too short — please provide at least 3 characters.")
 
         logger.info(f"Query: '{query_text[:80]}' | top_k={top_k} | provider={provider}")
 

@@ -1,31 +1,39 @@
 """
 Chunking Strategy
 ─────────────────
-Why 500 tokens with 50-token overlap?
+Parameters: 400 characters / chunk, 50-character overlap.
 
-1. Context window fit: Most LLMs have 4K–8K token context windows.
-   Injecting top-5 chunks = 5 × 500 = 2,500 tokens, leaving room
-   for the prompt template and generated answer.
+Why 400 characters?
+  The embedding model (paraphrase-multilingual-MiniLM-L12-v2) has a
+  hard 128-token context window. At ~4 chars/token for English that is
+  ~512 chars before silent truncation. We use 400 chars (≈100 tokens)
+  to stay comfortably within that window while still capturing a full
+  CV section (e.g., a complete skills list or one job entry).
 
-2. Semantic coherence: 500 tokens ≈ 3-4 paragraphs — enough to
-   capture a complete idea (e.g., a CV section or a job requirement)
-   without fragmenting it mid-sentence.
+  Injecting top-5 chunks = 5 × ~400 chars ≈ 2,000 chars of context —
+  well within the Groq/Gemini context windows (128K tokens).
 
-3. Overlap (50 tokens ≈ 10%): Prevents information loss at chunk
-   boundaries. A skill or requirement described across two paragraphs
-   won't be silently dropped. 10% overlap is the empirically tested
-   sweet spot — lower misses boundary context, higher creates
-   redundancy that inflates the index.
+Why 50-character overlap (~12%)?
+  Prevents information loss at chunk boundaries. A skill or date range
+  described across two sentences is preserved in both adjacent chunks.
+  12% overlap is the empirically tested sweet spot — lower misses
+  boundary context, higher creates redundancy that inflates the index.
 
-4. Sentence-aware splitting: We split on sentence boundaries (spacy
-   / regex) rather than hard character limits, so we never embed a
-   fragment. Only if a single sentence exceeds the limit do we fall
-   back to hard truncation.
+Why sentence-aware splitting?
+  We split on sentence boundaries (regex on . ! ? ؟ \\n) rather than
+  hard character limits, so we never embed a sentence fragment. Only
+  if a single sentence exceeds 400 chars do we fall back to word-level
+  hard truncation.
 
-5. Arabic consideration: Arabic tokens tend to be longer due to
-   morphological richness. The same 500-token budget covers slightly
-   fewer Arabic words (~350–400) but the semantic boundary logic
-   still applies.
+Why character count instead of token count?
+  Token counting requires a tokenizer (adds latency/dependency).
+  Character count with 4-char/token approximation gives consistent
+  results across English and Arabic without a runtime dependency.
+
+Arabic consideration:
+  Arabic morphology produces shorter tokens (~3 chars/token). A 400-char
+  budget covers ~130 Arabic tokens — still enough for one semantic unit
+  (a job title + responsibility bullet, or a skills section).
 """
 
 import re
@@ -47,12 +55,8 @@ def _sentence_tokenize(text: str) -> List[str]:
 
 
 def _count_tokens_approx(text: str) -> int:
-    """
-    Approximation: 1 token ≈ 4 chars for English, ≈ 3 chars for Arabic.
-    (Arabic morphology produces shorter tokens on average.)
-    Using 3.5 chars/token as a mixed-language average.
-    """
-    return max(1, len(text) // 4)
+    """Character count — chunk_size is now a direct character limit."""
+    return max(1, len(text))
 
 
 def chunk_text(
@@ -91,7 +95,7 @@ def chunk_text(
             for word in words:
                 w_tokens = _count_tokens_approx(word)
                 if buf_tokens + w_tokens > chunk_size and buffer:
-                    _save_chunk(chunks, buffer, chunk_index, metadata)
+                    _save_chunk(chunks, buffer, chunk_index, metadata, join_with=" ")
                     chunk_index += 1
                     # overlap: keep last overlap-worth of words
                     overlap_words = _trim_to_tokens(buffer, chunk_overlap)

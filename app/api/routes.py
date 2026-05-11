@@ -114,6 +114,20 @@ async def status():
         raise HTTPException(status_code=503, detail=f"Vector store unreachable: {e}")
 
 
+# ─── GET /chunks ────────────────────────────────────────────
+@router.get(
+    "/chunks",
+    summary="List all stored chunks",
+    description="Returns every chunk currently stored in the vector database, grouped by source file.",
+)
+async def list_chunks():
+    try:
+        chunks = vector_store.get_all_chunks()
+        return {"total": len(chunks), "chunks": chunks}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Vector store unreachable: {e}")
+
+
 # ─── GET /providers ─────────────────────────────────────────
 @router.get(
     "/providers",
