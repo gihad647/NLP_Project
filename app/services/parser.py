@@ -35,9 +35,12 @@ class PDFParser:
             return text  # fallback — return raw if reshaping fails
 
     def _clean_text(self, text: str) -> str:
-        """Remove URLs, redundant whitespace, and noise characters."""
+        """Remove URLs and noise, but preserve newlines so the splitter can use section breaks."""
         text = self._url_pattern.sub(" ", text)
-        text = self._whitespace_pattern.sub(" ", text)
+        # Collapse spaces/tabs on the same line, but keep newlines intact
+        text = re.sub(r"[^\S\n]+", " ", text)
+        # Normalise 3+ consecutive newlines down to 2
+        text = re.sub(r"\n{3,}", "\n\n", text)
         text = text.strip()
         return text
 

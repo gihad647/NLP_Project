@@ -47,6 +47,61 @@ def detect_language(text: str) -> str:
 
 
 # ────────────────────────────────────────────────────────────
+# Text cleaning (post-extraction)
+# ────────────────────────────────────────────────────────────
+_BULLET_RE = re.compile(r'[•‣◦⁃∙○▪•●○▪▸►]')
+
+
+def _clean_extracted_text(text: str) -> str:
+    """
+    Fix common PDF extraction artifacts:
+      1. Remove bullet/list marker characters (• ● ○ ▪ etc.)
+      2. Rejoin words that were split across lines by PDF word-wrap
+         (reportlab renders each word as a separate glyph run; PyMuPDF
+          extracts them one-per-line)
+    """
+    # Remove lines that are *only* a bullet character
+    text = re.sub(r'^\s*' + _BULLET_RE.pattern + r'\s*$', '', text, flags=re.MULTILINE)
+    # Remove bullet prefix from lines that also have text
+    text = re.sub(r'^' + _BULLET_RE.pattern + r'\s+', '', text, flags=re.MULTILINE)
+
+    lines = text.split('\n')
+    merged: List[str] = []
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            merged.append('')
+            continue
+
+        if merged and merged[-1]:
+            prev = merged[-1]
+            lc = prev[-1]   # last char of accumulated line
+            fc = line[0]    # first char of incoming fragment
+
+            # Join when:
+            # (a) prev ends with comma  → list continues on next line
+            # (b) prev doesn't end a sentence AND next fragment is a clear
+            #     continuation (starts lowercase or with an open-paren)
+            # (c) prev is a short stub (< 30 chars) that doesn't end a sentence
+            #     → almost certainly a word-wrap artifact
+            if (
+                lc == ','
+                or (lc not in '.!?:' and (fc.islower() or fc == '('))
+                or (lc not in '.!?:,' and len(prev) < 30)
+            ):
+                merged[-1] = prev + ' ' + line
+                continue
+
+        merged.append(line)
+
+    result = '\n'.join(merged)
+    result = re.sub(r'[^\S\n]+', ' ', result)    # collapse inline spaces
+    result = re.sub(r'\n{3,}', '\n\n', result)   # max two consecutive newlines
+    return result.strip()
+
+
+# ────────────────────────────────────────────────────────────
 # PDF Parser
 # ────────────────────────────────────────────────────────────
 def parse_pdf(file_path: str) -> Dict[str, Any]:
@@ -73,6 +128,8 @@ def parse_pdf(file_path: str) -> Dict[str, Any]:
         if len(raw.strip()) < 50:
             logger.info(f"Page {page_num+1} appears scanned, attempting OCR")
             raw = _ocr_page(page)
+
+        raw = _clean_extracted_text(raw)
 
         lang = detect_language(raw)
         if lang == "ar":

@@ -110,6 +110,25 @@ class VectorStore:
 
         return chunks
 
+    def get_all_chunks(self) -> List[Dict[str, Any]]:
+        """Return every chunk stored in the collection."""
+        collection = self._get_collection()
+        total = collection.count()
+        if total == 0:
+            return []
+        results = collection.get(
+            limit=total,
+            include=["documents", "metadatas"],
+        )
+        chunks = []
+        for doc, meta in zip(results["documents"], results["metadatas"]):
+            chunks.append({"content": doc, "metadata": meta})
+        chunks.sort(key=lambda c: (
+            c["metadata"].get("source", ""),
+            c["metadata"].get("chunk_index", 0),
+        ))
+        return chunks
+
     def collection_count(self) -> int:
         return self._get_collection().count()
 

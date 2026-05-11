@@ -1,176 +1,204 @@
 """
-Phase 4: Evaluation & Error Analysis
-──────────────────────────────────────
-Run this script after docker-compose up to test the RAG system.
-It sends 10 queries (7 normal + 3 edge cases that expose failures)
-and prints a structured report.
+Phase 4: Evaluation & Edge-Case Analysis
+─────────────────────────────────────────
+Run against a live system:
+    python tests/evaluate.py
+
+Uses only stdlib — no extra dependencies needed.
+Prints a structured report showing retrieval accuracy and failure diagnosis.
 """
-import httpx
 import json
-from dataclasses import dataclass, field
-from typing import List, Optional
+import sys
+import urllib.request
+import urllib.error
 import time
 
-BASE_URL = "http://localhost:8080/api/v1"
+BASE_URL = "http://localhost:8080"
 
 
-@dataclass
-class TestCase:
-    query: str
-    expected_keywords: List[str]
-    is_edge_case: bool = False
-    edge_case_type: Optional[str] = None
-    language: str = "en"
+# ── HTTP helper ───────────────────────────────────────────────────────────────
+def _query(text: str, top_k: int = 5) -> dict:
+    payload = json.dumps({"query": text, "top_k": top_k}).encode()
+    req = urllib.request.Request(
+        f"{BASE_URL}/api/v1/query",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
 
 
+def _top_source(result: dict) -> str:
+    if not result["retrieved_chunks"]:
+        return "NONE"
+    src = result["retrieved_chunks"][0]["source"]
+    return src.split("/")[-1].replace(".pdf", "").replace(".html", "")
+
+
+def _top_score(result: dict) -> float:
+    if not result["retrieved_chunks"]:
+        return 0.0
+    return result["retrieved_chunks"][0]["score"]
+
+
+def _rank_of(result: dict, keyword: str) -> int:
+    """Return 1-based rank of first chunk whose source contains keyword, or 99."""
+    for i, c in enumerate(result["retrieved_chunks"], 1):
+        if keyword in c["source"]:
+            return i
+    return 99
+
+
+# ── Test definitions ──────────────────────────────────────────────────────────
+# (description, query_text, expected_source_keyword, is_edge_case, edge_type, mitigation)
 TEST_CASES = [
-    # ── Normal queries ────────────────────────────────────
-    TestCase(
-        query="Find a senior Python developer with FastAPI experience",
-        expected_keywords=["python", "fastapi", "senior"],
+    # ── Normal / should pass ──────────────────────────────────────────────────
+    (
+        "Senior Python / FastAPI developer",
+        "Find a senior Python developer with FastAPI experience",
+        "john_smith", False, None, None,
     ),
-    TestCase(
-        query="Who has experience in machine learning and data science?",
-        expected_keywords=["machine learning", "data science"],
+    (
+        "ML engineer with NLP and RAG experience",
+        "Who has experience with NLP, RAG pipelines and sentence transformers?",
+        "sarah_chen", False, None, None,
     ),
-    TestCase(
-        query="List candidates with Docker and Kubernetes skills",
-        expected_keywords=["docker", "kubernetes"],
+    (
+        "DevOps engineer — Kubernetes & Terraform",
+        "Find a DevOps engineer experienced with Kubernetes and Terraform",
+        "ahmed_hassan", False, None, None,
     ),
-    TestCase(
-        query="Find a frontend developer experienced in React",
-        expected_keywords=["react", "frontend"],
+    (
+        "React / TypeScript frontend developer",
+        "Find a frontend developer with React and TypeScript skills",
+        "maria_garcia", False, None, None,
     ),
-    TestCase(
-        query="Who has a Computer Science degree?",
-        expected_keywords=["computer science", "bachelor", "degree"],
-    ),
-    TestCase(
-        query="Find candidates with more than 5 years of experience",
-        expected_keywords=["experience", "years"],
-    ),
-    TestCase(
-        query="Who speaks Arabic and English?",
-        expected_keywords=["arabic", "english"],
+    (
+        "Arabic query — web dev + databases",
+        "ابحث عن مطور ويب بخبرة في قواعد البيانات",
+        "omar_arabic", False, None, None,
     ),
 
-    # ── Edge cases (expected failures) ───────────────────
-    TestCase(
-        query="Find a quantum computing expert with 10 years in blockchain",
-        expected_keywords=["quantum", "blockchain"],
-        is_edge_case=True,
-        edge_case_type="Out-of-distribution query",
-        # FAILURE REASON: The CV corpus likely has no quantum computing candidates.
-        # The retriever will return the highest-scoring chunks by cosine similarity
-        # even if they are irrelevant (no hard threshold by default).
-        # The LLM may then hallucinate a candidate or give a fabricated answer
-        # rather than clearly saying "not found".
+    # ── Edge cases — expected failures / degraded results ─────────────────────
+    (
+        "EDGE: out-of-domain — quantum / blockchain",
+        "quantum computing expert with 10 years of blockchain experience",
+        None,        # no correct answer exists in corpus
+        True,
+        "Out-of-distribution query",
+        "Add a retrieval confidence threshold: if top score < 0.35, return "
+        "'No suitable candidate found' instead of hallucinating one.",
     ),
-    TestCase(
-        query="خبرة في تطوير الويب وقواعد البيانات",   # Arabic: "Experience in web dev and databases"
-        expected_keywords=["web", "database", "تطوير"],
-        is_edge_case=True,
-        edge_case_type="Arabic query on potentially English-only corpus",
-        language="ar",
-        # FAILURE REASON: If all CVs were ingested in English, the multilingual
-        # embedding model (paraphrase-multilingual-MiniLM-L12-v2) creates a
-        # cross-lingual embedding but the semantic space may drift due to the
-        # domain mismatch (CV language ≠ query language). Retrieval scores will
-        # be lower and the LLM may fail to map retrieved English context to the
-        # Arabic question intent.
+    (
+        "EDGE: synonym gap — 'AI Engineer' vs 'ML Engineer'",
+        "Find a senior AI Engineer",
+        "sarah_chen",   # correct but embedding gap may rank her low
+        True,
+        "Vocabulary / synonym mismatch",
+        "Use query expansion: map 'AI Engineer' -> 'machine learning engineer, "
+        "ML researcher, data scientist' before embedding.",
     ),
-    TestCase(
-        query="a",  # Nonsense / too-short query
-        expected_keywords=[],
-        is_edge_case=True,
-        edge_case_type="Degenerate/ambiguous query",
-        # FAILURE REASON: Single-character query produces a near-zero-information
-        # embedding. The retriever returns random chunks (the ones whose embedding
-        # happens to be closest to the letter 'a' in embedding space).
-        # This exposes the lack of a minimum query length / intent detection guard.
+    (
+        "EDGE: degenerate single-character query",
+        "a",
+        None,
+        True,
+        "Degenerate query — near-zero information embedding",
+        "Enforce minimum query length (>= 3 words) at the API layer; "
+        "return HTTP 400 for trivial queries.",
+    ),
+    (
+        "EDGE: Arabic query on English-dominant corpus",
+        "من لديه خبرة Kubernetes والبنية التحتية السحابية",
+        "ahmed_hassan",
+        True,
+        "Cross-lingual retrieval — Arabic query vs English CV",
+        "Ingest bilingual CVs; or pre-translate the query to English with "
+        "a lightweight model (e.g. Helsinki-NLP/opus-mt-ar-en) before embedding.",
     ),
 ]
 
 
-def run_query(query: str) -> dict:
-    resp = httpx.post(
-        f"{BASE_URL}/query",
-        json={"query": query, "top_k": 5},
-        timeout=60,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def evaluate():
-    print("=" * 70)
-    print("RAG SYSTEM EVALUATION REPORT")
-    print("=" * 70)
+# ── Runner ────────────────────────────────────────────────────────────────────
+def run() -> int:
+    sep = "=" * 78
+    print(f"\n{sep}")
+    print("RAG SYSTEM — RETRIEVAL EVALUATION REPORT")
+    print(sep)
 
     results = []
-    for i, tc in enumerate(TEST_CASES, 1):
-        print(f"\n[{i}/{len(TEST_CASES)}] {'[EDGE CASE] ' if tc.is_edge_case else ''}Query: {tc.query[:60]}")
-        if tc.is_edge_case:
-            print(f"  Type: {tc.edge_case_type}")
+    for desc, q, expected, is_edge, edge_type, mitigation in TEST_CASES:
+        tag = "[EDGE]" if is_edge else "[NORM]"
+        print(f"\n{tag} {desc}")
+        print(f"  Query: {q[:70]}")
 
-        start = time.time()
+        t0 = time.time()
         try:
-            result = run_query(tc.query)
-            elapsed = time.time() - start
+            result = _query(q)
+            elapsed = time.time() - t0
+            actual_src = _top_source(result)
+            score = _top_score(result)
+            answer_snip = result.get("answer", "")[:120].replace("\n", " ")
 
-            answer = result["answer"]
-            chunks = result["retrieved_chunks"]
-            top_score = max((c["score"] for c in chunks), default=0)
+            if expected is None:
+                # Info-only — we just want to observe the (wrong) output
+                status = "INFO"
+                rank = "-"
+            else:
+                rank = _rank_of(result, expected)
+                status = "PASS" if rank == 1 else "FAIL"
 
-            # Check if any expected keyword appears in the answer (case-insensitive)
-            hits = [kw for kw in tc.expected_keywords if kw.lower() in answer.lower()]
-            keyword_hit_rate = len(hits) / len(tc.expected_keywords) if tc.expected_keywords else 1.0
+            print(f"  Top source : {actual_src}  (score {score:.3f})")
+            if expected:
+                print(f"  Expected   : {expected}  (ranked #{rank})")
+            print(f"  Answer     : {answer_snip}...")
+            print(f"  Time       : {elapsed:.1f}s   Status: [{status}]")
 
-            print(f"  ✓ Answer ({elapsed:.1f}s): {answer[:120]}...")
-            print(f"  Top chunk score: {top_score:.3f} | Keyword hits: {len(hits)}/{len(tc.expected_keywords)}")
+            if status == "FAIL" or status == "INFO":
+                if edge_type:
+                    print(f"  Failure    : {edge_type}")
+                    print(f"  Mitigation : {mitigation}")
 
-            results.append({
-                "query": tc.query,
-                "is_edge_case": tc.is_edge_case,
-                "edge_case_type": tc.edge_case_type,
-                "answer_snippet": answer[:200],
-                "top_score": top_score,
-                "keyword_hit_rate": keyword_hit_rate,
-                "elapsed_s": round(elapsed, 2),
-                "status": "ok",
-            })
+            results.append({"desc": desc, "status": status, "score": score,
+                            "rank": rank, "is_edge": is_edge})
 
-        except Exception as e:
-            print(f"  ✗ ERROR: {e}")
-            results.append({"query": tc.query, "status": "error", "error": str(e)})
+        except Exception as exc:
+            elapsed = time.time() - t0
+            print(f"  ERROR: {exc}")
+            results.append({"desc": desc, "status": "ERROR", "is_edge": is_edge})
 
-    # Summary
-    print("\n" + "=" * 70)
+    # ── Summary ───────────────────────────────────────────────────────────────
+    print(f"\n{sep}")
     print("SUMMARY")
-    print("=" * 70)
-    ok = [r for r in results if r.get("status") == "ok"]
-    avg_score = sum(r["top_score"] for r in ok) / max(len(ok), 1)
-    avg_kw = sum(r["keyword_hit_rate"] for r in ok) / max(len(ok), 1)
-    print(f"Queries run:           {len(results)}")
-    print(f"Successful:            {len(ok)}")
-    print(f"Avg top chunk score:   {avg_score:.3f}")
-    print(f"Avg keyword hit rate:  {avg_kw:.2%}")
+    print(sep)
+    norm  = [r for r in results if not r["is_edge"]]
+    edges = [r for r in results if r["is_edge"]]
+    norm_pass = sum(1 for r in norm if r["status"] == "PASS")
+    print(f"Normal queries : {norm_pass}/{len(norm)} passed")
+    print(f"Edge cases     : {len(edges)} observed (failures are expected)")
+    if norm:
+        avg_score = sum(r.get("score", 0) for r in norm) / len(norm)
+        print(f"Avg top score  : {avg_score:.3f}")
 
-    print("\nEDGE CASE ANALYSIS")
-    print("-" * 70)
-    for r in results:
-        if r.get("is_edge_case"):
-            tc = next(t for t in TEST_CASES if t.query == r["query"])
-            print(f"\n• Query: {r['query'][:60]}")
-            print(f"  Failure type: {r.get('edge_case_type')}")
-            print(f"  Root cause: See comments in evaluate.py for this test case.")
-            print(f"  Mitigation: "
-                  + {
-                      "Out-of-distribution query":      "Add a retrieval confidence threshold; return 'not found' if top score < 0.4.",
-                      "Arabic query on potentially English-only corpus": "Ingest Arabic CVs alongside English ones; or use a translate-then-retrieve pipeline.",
-                      "Degenerate/ambiguous query":     "Add minimum query length validation (>= 3 words) in the API layer.",
-                  }.get(r.get("edge_case_type", ""), "Review retrieval pipeline."))
+    print(f"\nEdge-case breakdown:")
+    for i, (r, tc) in enumerate(
+        [(r, tc) for r, tc in zip(results, TEST_CASES) if r["is_edge"]], 1
+    ):
+        print(f"  {i}. {r['desc']}")
+        print(f"     Status: {r['status']}  |  Score: {r.get('score', 0):.3f}")
+
+    failures = sum(1 for r in norm if r["status"] != "PASS")
+    print(f"\n{'[ALL PASS]' if failures == 0 else f'[{failures} NORMAL QUERIES FAILED]'}")
+    print(sep + "\n")
+    return failures
 
 
 if __name__ == "__main__":
-    evaluate()
+    try:
+        urllib.request.urlopen(f"{BASE_URL}/health", timeout=5)
+    except Exception:
+        print(f"ERROR: Cannot reach {BASE_URL}")
+        print("       Start with:  docker compose up -d")
+        sys.exit(1)
+    sys.exit(run())
